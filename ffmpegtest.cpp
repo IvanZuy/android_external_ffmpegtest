@@ -38,25 +38,9 @@ sp<SurfaceComposerClient> gComposerClient;
 sp<SurfaceControl>        gControl;
 sp<Surface>               gSurface;
 struct g2d_buf*           gBuffers[ NUM_OF_G2D_BUFFERS ];
-
-//--------------------------------------------------------------------------
-static void usage(FILE * fp, int argc, char ** argv)
-{
-  fprintf( fp,
-           "Usage: %s [options]\n"
-           "Options:\n"
-           "-h | --help Print this message\n"
-           "",
-           argv[0] );
-}
-
-//--------------------------------------------------------------------------
-static const char short_options[] = "h";
-static const struct option long_options[] =
-{
-  { "help",       no_argument, NULL, 'h' },
-  { 0, 0, 0, 0 }
-};
+bool                      bDecoder,
+                          bCSC,
+                          bSurface;
 
 // --------------------------------------------------------------------------------
 static void initOutputSurface( void )
@@ -148,74 +132,82 @@ static void postFrame( AVFrame* frame )
                        dst;
   int buffIdx;
 
-  for( buffIdx = 0; buffIdx < NUM_OF_G2D_BUFFERS; buffIdx++ )
+  if( bCSC )
   {
-    if( !gBuffers[buffIdx] )
+    for( buffIdx = 0; buffIdx < NUM_OF_G2D_BUFFERS; buffIdx++ )
     {
-      int buffSize = frame->linesize[buffIdx] * frame->height / (( buffIdx > 0 ) ? 2 : 1 );
-      gBuffers[buffIdx] = g2d_alloc( buffSize, 0 );
-      if( gBuffers[ buffIdx ] )
+      if( !gBuffers[buffIdx] )
       {
-        fprintf( stderr, "Alloc buff %d, paddr 0x%08X, vaddr 0x%08X, size %d\n",
-                 buffIdx,
-                 (uint32_t)gBuffers[ buffIdx ]->buf_paddr,
-                 (uint32_t)gBuffers[ buffIdx ]->buf_vaddr,
-                 (uint32_t)gBuffers[ buffIdx ]->buf_size );
+        int buffSize = frame->linesize[buffIdx] * frame->height / (( buffIdx > 0 ) ? 2 : 1 );
+        gBuffers[buffIdx] = g2d_alloc( buffSize, 0 );
+        if( gBuffers[ buffIdx ] )
+        {
+          fprintf( stderr, "Alloc buff %d, paddr 0x%08X, vaddr 0x%08X, size %d\n",
+                   buffIdx,
+                   (uint32_t)gBuffers[ buffIdx ]->buf_paddr,
+                   (uint32_t)gBuffers[ buffIdx ]->buf_vaddr,
+                   (uint32_t)gBuffers[ buffIdx ]->buf_size );
+        }
       }
     }
 
+    if( g2d_open( &g2dHandle ) == -1 || g2dHandle == NULL )
+    {
+      fprintf( stderr, "Fail to open g2d device!\n" );
+      return;
+    }
   }
 
-  if( g2d_open( &g2dHandle ) == -1 || g2dHandle == NULL )
+  if( bSurface )
   {
-    fprintf( stderr, "Fail to open g2d device!\n" );
-    return;
+    res = gSurface->lock( &buffer, NULL );
+    if( res != OK )
+    {
+      fprintf( stderr, "Lock surface buffer error: %d\n", res );
+    }
   }
 
-  res = gSurface->lock( &buffer, NULL );
-  if( res != OK )
+  if( bCSC )
   {
-    fprintf( stderr, "Lock surface buffer error: %d\n", res );
+    memcpy(gBuffers[0]->buf_vaddr, frame->data[0], gBuffers[0]->buf_size);
+    memcpy(gBuffers[1]->buf_vaddr, frame->data[1], gBuffers[1]->buf_size);
+    memcpy(gBuffers[2]->buf_vaddr, frame->data[2], gBuffers[2]->buf_size);
+
+    src.planes[0] = gBuffers[0]->buf_paddr;
+    src.planes[1] = gBuffers[1]->buf_paddr;
+    src.planes[2] = gBuffers[2]->buf_paddr;
+    src.left      = 0;
+    src.top       = 0;
+    src.right     = frame->width;
+    src.bottom    = frame->height;
+    src.stride    = frame->linesize[0];
+    src.width     = frame->width;
+    src.height    = frame->height;
+    src.rot       = G2D_ROTATION_0;
+    src.format    = G2D_I420;
+
+    dst.planes[0] = get_phy_address(buffer.bits);
+    dst.left      = 0;
+    dst.top       = 0;
+    dst.right     = buffer.width;
+    dst.bottom    = buffer.height;
+    dst.stride    = buffer.stride;
+    dst.width     = buffer.width;
+    dst.height    = buffer.height;
+    dst.rot       = G2D_ROTATION_0;
+    dst.format    = G2D_RGB565;
+
+    g2d_blit( g2dHandle, &src, &dst );
+    g2d_finish( g2dHandle );
   }
 
-  memcpy(gBuffers[0]->buf_vaddr, frame->data[0], gBuffers[0]->buf_size);
-  memcpy(gBuffers[1]->buf_vaddr, frame->data[1], gBuffers[1]->buf_size);
-  memcpy(gBuffers[2]->buf_vaddr, frame->data[2], gBuffers[2]->buf_size);
-
-  src.planes[0] = gBuffers[0]->buf_paddr;
-  src.planes[1] = gBuffers[1]->buf_paddr;
-  src.planes[2] = gBuffers[2]->buf_paddr;
-  src.left      = 0;
-  src.top       = 0;
-  src.right     = frame->width;
-  src.bottom    = frame->height;
-  src.stride    = frame->linesize[0];
-  src.width     = frame->width;
-  src.height    = frame->height;
-  src.rot       = G2D_ROTATION_0;
-  src.format    = G2D_I420;
-
-  dst.planes[0] = get_phy_address(buffer.bits);
-  dst.left      = 0;
-  dst.top       = 0;
-  dst.right     = buffer.width;
-  dst.bottom    = buffer.height;
-  dst.stride    = buffer.stride;
-  dst.width     = buffer.width;
-  dst.height    = buffer.height;
-  dst.rot       = G2D_ROTATION_0;
-  dst.format    = G2D_RGB565;
-
-  g2d_blit( g2dHandle, &src, &dst );
-  g2d_finish( g2dHandle );
-
-
-//  memcpy( buffer.bits, frame->data[0], frame->width * frame->height );
-
-  res = gSurface->unlockAndPost();
-  if( res != OK )
+  if( bSurface )
   {
-    fprintf( stderr, "Unlock surface buffer error: %d\n", res );
+    res = gSurface->unlockAndPost();
+    if( res != OK )
+    {
+      fprintf( stderr, "Unlock surface buffer error: %d\n", res );
+    }
   }
 }
 
@@ -229,16 +221,25 @@ static int decode_write_frame( AVCodecContext *avctx,
   int   len,
         got_frame;
 
-  len = avcodec_decode_video2( avctx, frame, &got_frame, pkt );
-  if( len < 0)
+  if( bDecoder || ( *frame_count < 1 ) )
   {
-    fprintf(stderr, "Error while decoding frame %d\n", *frame_count);
-    return len;
+    len = avcodec_decode_video2( avctx, frame, &got_frame, pkt );
+    if( len < 0)
+    {
+      fprintf(stderr, "Error while decoding frame %d\n", *frame_count);
+      return len;
+    }
+  }
+  else
+  {
+    got_frame = 1;
   }
 
   if( got_frame )
   {
-//    postFrame( frame );
+    if( bCSC || bSurface )
+      postFrame( frame );
+
     (*frame_count)++;
   }
 
@@ -332,9 +333,40 @@ static void decode( void )
   avcodec_free_frame( &frame );
 }
 
+//--------------------------------------------------------------------------
+static void usage(FILE * fp, int argc, char ** argv)
+{
+  fprintf( fp,
+           "Usage: %s [options]\n"
+           "Options:\n"
+           "-h | --help Print this message\n"
+           "-a | --all      Benchmark all modules\n"
+           "-d | --decoder  Benchmark decoder\n"
+           "-c | --csc      Benchmark color space conversion\n"
+           "-s | --surface  Benchmark android surface blitter\n"
+           "",
+           argv[0] );
+}
+
+//--------------------------------------------------------------------------
+static const char short_options[] = "hadcs";
+static const struct option long_options[] =
+{
+  { "help",     no_argument, NULL, 'h' },
+  { "all",      no_argument, NULL, 'a' },
+  { "decoder",  no_argument, NULL, 'd' },
+  { "csc",      no_argument, NULL, 'c' },
+  { "surface",  no_argument, NULL, 's' },
+  { 0, 0, 0, 0 }
+};
+
 //-----------------------------------------------------------------------------
 int main(int argc, char ** argv)
 {
+  bDecoder  = false;
+  bCSC      = false;
+  bSurface  = false;
+
   for(;;)
   {
     int index;
@@ -349,12 +381,37 @@ int main(int argc, char ** argv)
       case 0:
         break;
 
+      case 'a':
+        bDecoder  = true;
+        bCSC      = true;
+        bSurface  = true;
+        break;
+
+      case 'd':
+        bDecoder = true;
+        break;
+
+      case 'c':
+        bCSC = true;
+        break;
+
+      case 's':
+        bSurface = true;
+        break;
+
       case 'h':
       default:
         usage(stderr, argc, argv);
         exit(EXIT_FAILURE);
         break;
     }
+  }
+
+  if( !bDecoder && !bCSC && !bSurface )
+  {
+    bDecoder  = true;
+    bCSC      = true;
+    bSurface  = true;
   }
 
   initOutputSurface();
