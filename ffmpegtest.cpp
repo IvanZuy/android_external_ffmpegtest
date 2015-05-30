@@ -238,7 +238,7 @@ static int decode_write_frame( AVCodecContext *avctx,
 
   if( got_frame )
   {
-    postFrame( frame );
+//    postFrame( frame );
     (*frame_count)++;
   }
 
