@@ -218,8 +218,8 @@ static int decode_write_frame( AVCodecContext *avctx,
                                AVPacket       *pkt,
                                int             last )
 {
-  int   len,
-        got_frame;
+  int   len = 0,
+        got_frame = 0;
 
   if( bDecoder || ( *frame_count < 1 ) )
   {
