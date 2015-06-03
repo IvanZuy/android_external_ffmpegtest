@@ -13,13 +13,30 @@
 #include <unistd.h>
 #include <getopt.h>
 #include <g2d.h>
-#include <sys/time.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <errno.h>
 #include <binder/IServiceManager.h>
+#include <binder/ProcessState.h>
+#include <media/ICrypto.h>
+#include <media/stagefright/foundation/ABuffer.h>
+#include <media/stagefright/foundation/ADebug.h>
+#include <media/stagefright/foundation/ALooper.h>
+#include <media/stagefright/foundation/AMessage.h>
+#include <media/stagefright/foundation/AString.h>
+#include <media/stagefright/DataSource.h>
+#include <media/stagefright/MediaCodec.h>
+#include <media/stagefright/MediaCodecList.h>
+#include <media/stagefright/MediaDefs.h>
+#include <media/stagefright/MetaData.h>
+#include <media/stagefright/NativeWindowWrapper.h>
 #include <gui/ISurfaceComposer.h>
 #include <gui/SurfaceComposerClient.h>
 #include <gui/Surface.h>
 #include <ui/DisplayInfo.h>
 #include <android/native_window.h>
+#include "Utils.h"
 
 #define UINT64_C(x) (x ## ULL)
 extern "C" {
@@ -31,14 +48,32 @@ using namespace android;
 //--------------------------------------------------------------------------
 #define INBUF_SIZE              0x20000
 #define NUM_OF_G2D_BUFFERS      3
+#define STREAM_MIME_TYPE        "video/avc"
 
 //--------------------------------------------------------------------------
-uint8_t inBuff[INBUF_SIZE + FF_INPUT_BUFFER_PADDING_SIZE];
+typedef struct {
+  size_t   mIndex;
+  size_t   mOffset;
+  size_t   mSize;
+  int64_t  mPresentationTimeUs;
+  uint32_t mFlags;
+}BufferInfo;
+
+uint8_t   inBuff[INBUF_SIZE + FF_INPUT_BUFFER_PADDING_SIZE];
+uint32_t  inBuffSize;
+
 sp<SurfaceComposerClient> gComposerClient;
 sp<SurfaceControl>        gControl;
 sp<Surface>               gSurface;
+sp<NativeWindowWrapper>   gNativeWindowWrapper;
+struct ANativeWindow     *gNativeWindow;
+sp<MediaCodec>            gCodec;
+sp<ALooper>               gLooper;
+Vector<sp<ABuffer> >      gInBuffers;
+Vector<sp<ABuffer> >      gOutBuffers;
 struct g2d_buf*           gBuffers[ NUM_OF_G2D_BUFFERS ];
-bool                      bDecoder,
+bool                      bSDecoder,
+                          bHDecoder,
                           bCSC,
                           bSurface;
 
@@ -80,8 +115,127 @@ static void initOutputSurface( void )
   {
     fprintf( stderr, "Screen surface create error\n" );
   }
+  gNativeWindowWrapper = new NativeWindowWrapper( gSurface );
+  gNativeWindow = gSurface.get();
+
+//  int swap = native_window_api_connect( gNativeWindow, NATIVE_WINDOW_API_MEDIA );
+//  fprintf( stderr, "Swap interval %d\n", swap );
+
   fprintf( stderr, "Screen surface created\n" );
   fprintf( stderr, "Screen surface %s\n", (gSurface->isValid(gSurface)?"valid":"invalid") );
+}
+
+//-----------------------------------------------------------------------------
+static void initHwCodec( void )
+{
+  sp<AMessage> format;
+  sp<MetaData> meta = new MetaData;
+  FILE        *file;
+  uint8_t      configData[ 1024 ];
+  uint32_t     configDataSize;
+  status_t     res;
+
+  gLooper = new ALooper;
+  gLooper->start();
+
+  gCodec = MediaCodec::CreateByType( gLooper, STREAM_MIME_TYPE, false );
+  if( gCodec != NULL )
+  {
+    fprintf( stderr, "Codec created\n" );
+  }
+
+  file = fopen( "/boot/carplay/AnnexB/carplay_video_000.avc", "rb" );
+  if( !file )
+  {
+    fprintf( stderr, "Could not open stream config file.\n" );
+    exit(1);
+  }
+  configDataSize = fread( configData, 1, sizeof( configData ), file );
+  fclose( file );
+
+  if( configDataSize <= 0 )
+  {
+    fprintf( stderr, "Could not read stream config file.\n" );
+    exit(1);
+  }
+  meta->clear();
+  meta->setCString( kKeyMIMEType,         STREAM_MIME_TYPE );
+  meta->setInt32(   kKeyTrackID,          1 );
+  meta->setInt32(   kKeyWidth,            800 );
+  meta->setInt32(   kKeyHeight,           480 );
+  meta->setInt32(   kKeyDisplayWidth,     800 );
+  meta->setInt32(   kKeyDisplayHeight,    480 );
+  meta->setData(    kKeyAVCC, kTypeAVCC,  configData, configDataSize );
+  meta->dumpToLog();
+  convertMetaDataToMessage( meta, &format );
+
+  res = gCodec->configure( format, gNativeWindowWrapper->getSurfaceTextureClient(), NULL, 0 );
+  if( res != OK )
+  {
+    fprintf( stderr, "Codec configure error: %d\n", res );
+    exit(1);
+  }
+
+  res = gCodec->start();
+  if( res != OK )
+  {
+    fprintf( stderr, "Codec start error: %d\n", res );
+    exit(1);
+  }
+
+  res = gCodec->getInputBuffers( &gInBuffers );
+  if( res != OK )
+  {
+    fprintf( stderr, "Codec get input buffers error: %d\n", res );
+    exit(1);
+  }
+
+  res = gCodec->getOutputBuffers( &gOutBuffers );
+  if( res != OK )
+  {
+    fprintf( stderr, "Codec get output buffers error: %d\n", res );
+    exit(1);
+  }
+
+  sp<ABuffer> srcBuffer;
+  size_t j = 0;
+  while( format->findBuffer( StringPrintf("csd-%d", j).c_str(), &srcBuffer ) )
+  {
+    size_t index;
+    res = gCodec->dequeueInputBuffer( &index, -1ll );
+    if( res != OK )
+    {
+      fprintf( stderr, "Dequeue error\n" );
+    }
+
+    const sp<ABuffer> &dstBuffer = gInBuffers.itemAt( index );
+
+    dstBuffer->setRange( 0, srcBuffer->size() );
+    memcpy( dstBuffer->data(), srcBuffer->data(), srcBuffer->size() );
+
+    fprintf( stderr, "CSD data size: %d\n", srcBuffer->size() );
+    for( size_t i = 0; i < srcBuffer->size(); i++ )
+    {
+      fprintf( stderr, "0x%02X ", srcBuffer->data()[ i ] );
+      if( !( ( i + 1 ) % 8) )
+        fprintf( stderr, "\n" );
+    }
+    fprintf(stderr, "\n" );
+
+    res = gCodec->queueInputBuffer( index,
+                                    0,
+                                    dstBuffer->size(),
+                                    0ll,
+                                    MediaCodec::BUFFER_FLAG_CODECCONFIG );
+    if( res != OK )
+    {
+      fprintf( stderr, "Queue error\n" );
+    }
+
+    j++;
+  }
+
+  fprintf( stderr, "Codec init OK.\n" );
 }
 
 // --------------------------------------------------------------------------------
@@ -221,7 +375,7 @@ static int decode_write_frame( AVCodecContext *avctx,
   int   len = 0,
         got_frame = 0;
 
-  if( bDecoder || ( *frame_count < 1 ) )
+  if( bSDecoder || ( *frame_count < 1 ) )
   {
     len = avcodec_decode_video2( avctx, frame, &got_frame, pkt );
     if( len < 0)
@@ -333,37 +487,113 @@ static void decode( void )
   avcodec_free_frame( &frame );
 }
 
+//-----------------------------------------------------------------------------
+static void decodeHw( void )
+{
+  char            inFileName[50];
+  FILE           *fIn;
+  size_t          index;
+  status_t        res;
+  BufferInfo      info;
+  int             i, frame_count;
+  struct timeval  tv1, tv2;
+  double          elapsedTime;
+
+  memset( inBuff, 0, sizeof( inBuff ) );
+  frame_count = 0;
+  gettimeofday( &tv1, NULL );
+  for( i = 1; i <= 234; i++ )
+  {
+    sprintf( inFileName, "/boot/carplay/AnnexB/carplay_video_%03d.raw", i );
+    fIn = fopen( inFileName, "rb" );
+    if( !fIn )
+    {
+      fprintf(stderr, "Could not open %s\n", inFileName);
+      exit(1);
+    }
+
+    inBuffSize = fread( inBuff, 1, INBUF_SIZE, fIn );
+    if( inBuffSize <= 0 )
+    {
+      fprintf(stderr, "File read error\n");
+      break;
+    }
+
+    if( inBuffSize > 0 )
+    {
+      do{
+        res = gCodec->dequeueInputBuffer( &index, 1ll );
+        if( res == OK )
+        {
+          const sp<ABuffer> &buffer = gInBuffers.itemAt( index );
+
+          buffer->setRange( 0, inBuffSize );
+          memcpy( (uint8_t*)buffer->data(), inBuff, inBuffSize );
+
+          gCodec->queueInputBuffer( index,
+                                    buffer->offset(),
+                                    buffer->size(),
+                                    0ll,
+                                    0 );
+          break;
+        }
+
+        res = gCodec->dequeueOutputBuffer( &info.mIndex,
+                                         &info.mOffset,
+                                         &info.mSize,
+                                         &info.mPresentationTimeUs,
+                                         &info.mFlags);
+        if( res == OK )
+        {
+          if( bSurface )
+            gCodec->renderOutputBufferAndRelease( info.mIndex );
+          else
+            gCodec->releaseOutputBuffer( info.mIndex );
+          frame_count++;
+        }
+      }while( true );
+    }
+
+    fclose( fIn );
+  }
+  gettimeofday( &tv2, NULL );
+  elapsedTime = tv2.tv_sec - tv1.tv_sec;
+  elapsedTime += ( tv2.tv_usec - tv1.tv_usec ) / 1000000.0f;
+  fprintf(stderr, "Decoded %d frames in %5.3f sec = %5.2f fps\n", i, elapsedTime, i/elapsedTime );
+}
+
 //--------------------------------------------------------------------------
 static void usage(FILE * fp, int argc, char ** argv)
 {
   fprintf( fp,
            "Usage: %s [options]\n"
            "Options:\n"
-           "-h | --help Print this message\n"
            "-a | --all      Benchmark all modules\n"
-           "-d | --decoder  Benchmark decoder\n"
+           "-s | --soft     Benchmark software decoder\n"
+           "-h | --hard     Benchmark hardware decoder\n"
            "-c | --csc      Benchmark color space conversion\n"
-           "-s | --surface  Benchmark android surface blitter\n"
+           "-d | --display  Benchmark display\n"
            "",
            argv[0] );
 }
 
 //--------------------------------------------------------------------------
-static const char short_options[] = "hadcs";
+static const char short_options[] = "hsacd";
 static const struct option long_options[] =
 {
-  { "help",     no_argument, NULL, 'h' },
+  { "hard",     no_argument, NULL, 'h' },
+  { "soft",     no_argument, NULL, 's' },
   { "all",      no_argument, NULL, 'a' },
-  { "decoder",  no_argument, NULL, 'd' },
   { "csc",      no_argument, NULL, 'c' },
-  { "surface",  no_argument, NULL, 's' },
+  { "display",  no_argument, NULL, 'd' },
   { 0, 0, 0, 0 }
 };
 
 //-----------------------------------------------------------------------------
 int main(int argc, char ** argv)
 {
-  bDecoder  = false;
+  bSDecoder = false;
+  bHDecoder = false;
   bCSC      = false;
   bSurface  = false;
 
@@ -382,24 +612,27 @@ int main(int argc, char ** argv)
         break;
 
       case 'a':
-        bDecoder  = true;
+        bSDecoder = true;
         bCSC      = true;
         bSurface  = true;
         break;
 
-      case 'd':
-        bDecoder = true;
+      case 's':
+        bSDecoder = true;
+        break;
+
+      case 'h':
+        bHDecoder = true;
         break;
 
       case 'c':
         bCSC = true;
         break;
 
-      case 's':
+      case 'd':
         bSurface = true;
         break;
 
-      case 'h':
       default:
         usage(stderr, argc, argv);
         exit(EXIT_FAILURE);
@@ -407,15 +640,26 @@ int main(int argc, char ** argv)
     }
   }
 
-  if( !bDecoder && !bCSC && !bSurface )
+  if( !bSDecoder && !bHDecoder && !bCSC && !bSurface )
   {
-    bDecoder  = true;
+    bSDecoder = true;
     bCSC      = true;
     bSurface  = true;
   }
 
+  ProcessState::self()->startThreadPool();
+  DataSource::RegisterDefaultSniffers();
+
   initOutputSurface();
-  decode();
+  if( bHDecoder )
+  {
+    initHwCodec();
+    decodeHw();
+  }
+  else
+  {
+    decode();
+  }
 
   exit(EXIT_SUCCESS);
 }
