@@ -118,8 +118,11 @@ static void initOutputSurface( void )
   gNativeWindowWrapper = new NativeWindowWrapper( gSurface );
   gNativeWindow = gSurface.get();
 
-//  int swap = native_window_api_connect( gNativeWindow, NATIVE_WINDOW_API_MEDIA );
-//  fprintf( stderr, "Swap interval %d\n", swap );
+  //int swap = gNativeWindow->setSwapInterval( gNativeWindow, 10000 );
+  //fprintf( stderr, "Swap interval %d\n", swap );
+
+  //native_window_set_buffers_transform( gNativeWindow, NATIVE_WINDOW_TRANSFORM_FLIP_V );
+  //native_window_set_buffers_format( gNativeWindow, HAL_PIXEL_FORMAT_YV12 );
 
   fprintf( stderr, "Screen surface created\n" );
   fprintf( stderr, "Screen surface %s\n", (gSurface->isValid(gSurface)?"valid":"invalid") );
