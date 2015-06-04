@@ -118,9 +118,6 @@ static void initOutputSurface( void )
   gNativeWindowWrapper = new NativeWindowWrapper( gSurface );
   gNativeWindow = gSurface.get();
 
-  int swap = gNativeWindow->setSwapInterval( gNativeWindow, 0 );
-  fprintf( stderr, "Swap interval %d\n", swap );
-
   //native_window_set_buffers_transform( gNativeWindow, NATIVE_WINDOW_TRANSFORM_FLIP_V );
   native_window_set_buffers_format( gNativeWindow, HAL_PIXEL_FORMAT_YV12 );
   native_window_set_buffers_dimensions( gNativeWindow, 800, 480 );
@@ -319,9 +316,12 @@ static void postFrame( AVFrame* frame )
 
   if( bSurface )
   {
-    uint64_t t1 = systemTime(SYSTEM_TIME_MONOTONIC);
+    DurationTimer timer;
+    timer.start();
     res = gSurface->lock( &buffer, NULL );
-//    fprintf( stderr, "t1: %lld\n", (systemTime(SYSTEM_TIME_MONOTONIC) - t1 ) /1000 );
+    gNativeWindow->setSwapInterval( gNativeWindow, 0 );
+    timer.stop();
+//    fprintf( stderr, "t1: %lld\n", timer.durationUsecs() );
 
 
     if( res != OK )
@@ -375,9 +375,11 @@ static void postFrame( AVFrame* frame )
 
   if( bSurface )
   {
-    uint64_t t1 = systemTime(SYSTEM_TIME_MONOTONIC);
+    DurationTimer timer;
+    timer.start();
     res = gSurface->unlockAndPost();
-//    fprintf( stderr, "t2: %lld\n", (systemTime(SYSTEM_TIME_MONOTONIC) - t1 ) /1000 );
+    timer.stop();
+//    fprintf( stderr, "t2: %lld\n", timer.durationUsecs() );
 
     if( res != OK )
     {
