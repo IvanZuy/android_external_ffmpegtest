@@ -321,7 +321,7 @@ static void postFrame( AVFrame* frame )
   {
     uint64_t t1 = systemTime(SYSTEM_TIME_MONOTONIC);
     res = gSurface->lock( &buffer, NULL );
-    fprintf( stderr, "t1: %d\n", (systemTime(SYSTEM_TIME_MONOTONIC) - t1 ) /1000 );
+//    fprintf( stderr, "t1: %lld\n", (systemTime(SYSTEM_TIME_MONOTONIC) - t1 ) /1000 );
 
 
     if( res != OK )
@@ -369,15 +369,15 @@ static void postFrame( AVFrame* frame )
     int Csize = Ysize / 4;
 
     memcpy( buffer.bits, frame->data[0], Ysize );
-    memcpy( buffer.bits + Ysize, frame->data[2], Csize );
-    memcpy( buffer.bits + Ysize + Csize, frame->data[1], Csize );
+    memcpy( (uint8_t*)buffer.bits + Ysize, frame->data[2], Csize );
+    memcpy( (uint8_t*)buffer.bits + Ysize + Csize, frame->data[1], Csize );
   }
 
   if( bSurface )
   {
     uint64_t t1 = systemTime(SYSTEM_TIME_MONOTONIC);
     res = gSurface->unlockAndPost();
-    fprintf( stderr, "t2: %d\n", (systemTime(SYSTEM_TIME_MONOTONIC) - t1 ) /1000 );
+//    fprintf( stderr, "t2: %lld\n", (systemTime(SYSTEM_TIME_MONOTONIC) - t1 ) /1000 );
 
     if( res != OK )
     {
@@ -618,6 +618,12 @@ int main(int argc, char ** argv)
   bCSC      = false;
   bSurface  = false;
 
+  if( argc == 1 )
+  {
+    usage(stderr, argc, argv);
+    exit(EXIT_FAILURE);
+  }
+
   for(;;)
   {
     int index;
@@ -629,9 +635,6 @@ int main(int argc, char ** argv)
 
     switch(c)
     {
-      case 0:
-        break;
-
       case 'a':
         bSDecoder = true;
         bCSC      = true;
