@@ -118,11 +118,13 @@ static void initOutputSurface( void )
   gNativeWindowWrapper = new NativeWindowWrapper( gSurface );
   gNativeWindow = gSurface.get();
 
-  //int swap = gNativeWindow->setSwapInterval( gNativeWindow, 10000 );
-  //fprintf( stderr, "Swap interval %d\n", swap );
+  int swap = gNativeWindow->setSwapInterval( gNativeWindow, 0 );
+  fprintf( stderr, "Swap interval %d\n", swap );
 
   //native_window_set_buffers_transform( gNativeWindow, NATIVE_WINDOW_TRANSFORM_FLIP_V );
-  //native_window_set_buffers_format( gNativeWindow, HAL_PIXEL_FORMAT_YV12 );
+  native_window_set_buffers_format( gNativeWindow, HAL_PIXEL_FORMAT_YV12 );
+  native_window_set_buffers_dimensions( gNativeWindow, 800, 480 );
+  native_window_set_scaling_mode( gNativeWindow, NATIVE_WINDOW_SCALING_MODE_SCALE_TO_WINDOW );
 
   fprintf( stderr, "Screen surface created\n" );
   fprintf( stderr, "Screen surface %s\n", (gSurface->isValid(gSurface)?"valid":"invalid") );
@@ -317,7 +319,11 @@ static void postFrame( AVFrame* frame )
 
   if( bSurface )
   {
+    uint64_t t1 = systemTime(SYSTEM_TIME_MONOTONIC);
     res = gSurface->lock( &buffer, NULL );
+    fprintf( stderr, "t1: %d\n", (systemTime(SYSTEM_TIME_MONOTONIC) - t1 ) /1000 );
+
+
     if( res != OK )
     {
       fprintf( stderr, "Lock surface buffer error: %d\n", res );
@@ -357,10 +363,22 @@ static void postFrame( AVFrame* frame )
     g2d_blit( g2dHandle, &src, &dst );
     g2d_finish( g2dHandle );
   }
+  else
+  {
+    int Ysize = buffer.width * buffer.height;
+    int Csize = Ysize / 4;
+
+    memcpy( buffer.bits, frame->data[0], Ysize );
+    memcpy( buffer.bits + Ysize, frame->data[2], Csize );
+    memcpy( buffer.bits + Ysize + Csize, frame->data[1], Csize );
+  }
 
   if( bSurface )
   {
+    uint64_t t1 = systemTime(SYSTEM_TIME_MONOTONIC);
     res = gSurface->unlockAndPost();
+    fprintf( stderr, "t2: %d\n", (systemTime(SYSTEM_TIME_MONOTONIC) - t1 ) /1000 );
+
     if( res != OK )
     {
       fprintf( stderr, "Unlock surface buffer error: %d\n", res );
