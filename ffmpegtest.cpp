@@ -36,6 +36,7 @@
 #include <gui/Surface.h>
 #include <ui/DisplayInfo.h>
 #include <android/native_window.h>
+#include <utils/Timers.h>
 #include "Utils.h"
 
 #define UINT64_C(x) (x ## ULL)
@@ -316,12 +317,12 @@ static void postFrame( AVFrame* frame )
 
   if( bSurface )
   {
-    DurationTimer timer;
-    timer.start();
+    nsecs_t start_time = systemTime();
+
     res = gSurface->lock( &buffer, NULL );
     gNativeWindow->setSwapInterval( gNativeWindow, 0 );
-    timer.stop();
-//    fprintf( stderr, "t1: %lld\n", timer.durationUsecs() );
+
+//    fprintf( stderr, "t1: %lld\n", ns2us(start_time - systemTime()) );
 
 
     if( res != OK )
@@ -375,11 +376,10 @@ static void postFrame( AVFrame* frame )
 
   if( bSurface )
   {
-    DurationTimer timer;
-    timer.start();
+    nsecs_t start_time = systemTime();
+
     res = gSurface->unlockAndPost();
-    timer.stop();
-//    fprintf( stderr, "t2: %lld\n", timer.durationUsecs() );
+//    fprintf( stderr, "t2: %lld\n", ns2us(start_time - systemTime()) );
 
     if( res != OK )
     {
