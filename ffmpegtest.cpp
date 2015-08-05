@@ -36,6 +36,7 @@
 #include <gui/Surface.h>
 #include <ui/DisplayInfo.h>
 #include <android/native_window.h>
+#include <utils/Timers.h>
 #include "Utils.h"
 
 #define UINT64_C(x) (x ## ULL)
