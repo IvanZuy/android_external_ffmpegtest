@@ -316,14 +316,7 @@ static void postFrame( AVFrame* frame )
 
   if( bSurface )
   {
-    DurationTimer timer;
-    timer.start();
     res = gSurface->lock( &buffer, NULL );
-    gNativeWindow->setSwapInterval( gNativeWindow, 0 );
-    timer.stop();
-//    fprintf( stderr, "t1: %lld\n", timer.durationUsecs() );
-
-
     if( res != OK )
     {
       fprintf( stderr, "Lock surface buffer error: %d\n", res );
@@ -375,12 +368,7 @@ static void postFrame( AVFrame* frame )
 
   if( bSurface )
   {
-    DurationTimer timer;
-    timer.start();
     res = gSurface->unlockAndPost();
-    timer.stop();
-//    fprintf( stderr, "t2: %lld\n", timer.durationUsecs() );
-
     if( res != OK )
     {
       fprintf( stderr, "Unlock surface buffer error: %d\n", res );
